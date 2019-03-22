@@ -1,10 +1,11 @@
 import numpy as np
+import math
 import data_generators as dg
 import neural_netowrk
 
 
 # prepare data
-num_of_linear_dots = 5
+num_of_linear_dots = 100
 
 x_1, y_1 = dg.generate_linear(n=num_of_linear_dots)
 x_2, y_2 = dg.generate_XOR_easy()
@@ -18,17 +19,58 @@ Y = np.vstack((y_1, y_2))
 X = X[arr]
 Y = Y[arr]
 
-Loss = 0
+# # XOR data only
+# X, Y = dg.generate_XOR_easy()
+# arr = np.arange(21)
+# np.random.shuffle(arr)
+# X = X[arr]
+# Y = Y[arr]
+
+# neural network parameters
+Loss_avg = 0
+lr = 1
+acc = 0
+epoch = 0
 
 net = neural_netowrk.net()
 
 # training
 while True:
+    Loss_avg = 0
+    acc = 0
     for i in range(X.shape[0]):
+
+        # for i in range(1):
+
         # forward
-        y_pred = net.forward(X[i])
+        y_pred, z = net.forward(np.expand_dims(X[i], axis=1))
         # loss_function
-        Loss = net.loss(Y[i], y_pred)
+        Loss = net.loss(Y[i], z)
+        Loss_avg += Loss[0, 0]
         # back-propagation
-        print(y_pred, Loss)
-    break
+        if (Loss[0, 0] > 0.1):
+            # net.peek_weights()
+            net.back_propagation(Y[i], y_pred, z, learning_rate=lr)
+            # net.peek_weights()
+            # print("i : ", i, "data : ", X[i], "Loss : ", Loss,
+            #       "Y_pred : ", y_pred, "Y_gt : ", Y[i], "\n")
+    epoch += 1
+    Loss_avg /= float(X.shape[0])
+    if (epoch % 100 == 0):
+        print("Epoch ", epoch, " - loss : ", Loss_avg)
+    if (epoch % 1000 == 0):
+        net.peek_weights()
+
+    if (Loss_avg < 0.1):
+        print("End")
+        break
+    elif (Loss_avg < 1.):
+        lr = 0.7
+    elif (Loss_avg < 0.5):
+        lr = 0.1
+    elif (Loss_avg < 0.3):
+        lr = 0.01
+    elif (math.isnan(Loss_avg)):
+        print("Oh no!")
+        break
+        # Log per 1000 epochs
