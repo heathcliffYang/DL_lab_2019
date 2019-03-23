@@ -33,9 +33,9 @@ def derivative_relu(x):
 class net():
     def __init__(self):
         # initialize netowrk weights
-        self.w_1 = np.random.uniform(0.01, 2, (4, 2))
-        self.w_2 = np.random.uniform(0.01, 2, (4, 4))
-        self.w_3 = np.random.uniform(0.01, 2, (1, 4))
+        self.w_1 = np.random.uniform(-1, 1, (2, 2))
+        self.w_2 = np.random.uniform(-1, 1, (2, 2))
+        self.w_3 = np.random.uniform(-1, 1, (1, 2))
 
     def forward(self, x):
 

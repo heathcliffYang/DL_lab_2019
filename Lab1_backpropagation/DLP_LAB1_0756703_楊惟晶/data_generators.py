@@ -37,7 +37,7 @@ def generate_XOR_easy():
     return np.array(inputs), np.array(labels).reshape(21, 1)
 
 
-def show_result(x, y, pred_y):
+def show_result(x, y, pred_y, filename):
     plt.subplot(1, 2, 1)
     plt.title('Ground truth', fontsize=18)
     for i in range(x.shape[0]):
@@ -54,4 +54,4 @@ def show_result(x, y, pred_y):
         else:
             plt.plot(x[i][0], x[i][1], 'bo')
 
-    plt.show()
+    plt.savefig(filename)
