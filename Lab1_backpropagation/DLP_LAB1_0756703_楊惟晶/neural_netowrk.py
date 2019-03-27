@@ -83,6 +83,7 @@ class net():
         g_w1 = derivative_softplus * (1-2*y_gt) * \
             np.matmul(
             np.transpose(
+                # A * w_2
                 np.matmul(
                     self.w_3 * derivative_sigmoid(np.transpose(self.h_2_p)), self.w_2)
                 * derivative_sigmoid(np.transpose(self.h_1_p))), np.transpose(self.x))
