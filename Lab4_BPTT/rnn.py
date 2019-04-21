@@ -4,8 +4,8 @@ import math
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
 
-# def derivative_sigmoid(x):
-#     return np.multiply(x, 1.0-x)
+def derivative_sigmoid(x):
+    return np.multiply(x, 1.0-x)
 
 class RNN():
     def __init__(self):
@@ -26,13 +26,13 @@ class RNN():
         dim_output = self.dim_output
 
         self.U = np.random.uniform(-1, 1, (dim_hidden, 2))
-        print("U", self.U)
+        # print("U", self.U)
 
         self.W = np.random.uniform(-1, 1, (dim_hidden,dim_hidden))
-        print("W", self.W)
+        # print("W", self.W)
 
         self.V = np.random.uniform(-1, 1, (dim_output, dim_hidden))
-        print("V", self.V)
+        # print("V", self.V)
 
     def forward(self, x):
         # x = [8 x 2 x 1] = [8 * [num1's digit i, num2's digit i]]
@@ -53,12 +53,11 @@ class RNN():
         return np.diag(1-self.h[i,:,0]**2)
 
     def derivative_softplus(self, i):  
-        if math.isnan(1/(1+np.exp(-(1-2*self.y_gt[i,0])*self.o[i]))):
-            print("A", self.o[i])
-        elif math.isnan(1 - 2*self.y_gt[i,0]):
-            print("B")
-            raise EOFError
-        return 1/(1+np.exp(-(1-2*self.y_gt[i,0])*self.o[i])) * (1 - 2*self.y_gt[i,0]) 
+        # print(i, "gt",self.y_gt[i])
+        # print(i, "hat",self.y_hat[i])
+        # print(i,"o",self.o[i])
+        # return (1 - 2*self.y_gt[i,0])/(1+np.exp(-(1-2*self.y_gt[i,0])*self.o[i]))
+        return (self.y_hat[i,0]-self.y_gt[i,0]) * derivative_sigmoid(self.y_hat[i,0])
 
     def error(self):
         error = 0
@@ -66,6 +65,12 @@ class RNN():
             if (self.y_hat[i] > 0.5 and self.y_gt[i] < 0.5) or (self.y_hat[i] <= 0.5 and self.y_gt[i] > 0.5):
                 error += 1
         return error
+
+    def loss(self):
+        loss = 0
+        for i in range(8):
+            loss += math.log(1+math.exp((1-2*self.y_gt[i])*self.o[i]))
+        return loss
         
 
     def backward(self, y_gt, alpha):
@@ -80,7 +85,7 @@ class RNN():
                 # print(i,"-grad h L", self.gradient_h[i])
             else:
                 self.gradient_h[i] = self.V.T*self.derivative_softplus(i-1) + np.matmul(np.matmul(self.W.T, self.H(i+1)), self.gradient_h[i+1])
-                # print(i,"-grad h L", self.gradient_h[i])
+                # print("H", self.H(i+1))
 
             self.gradient_W = self.gradient_W + np.matmul(np.matmul(self.H(i), self.gradient_h[i]), self.h[i-1].T)
             self.gradient_U = self.gradient_U + np.matmul(np.matmul(self.H(i), self.gradient_h[i]), self.x[i-1].T)

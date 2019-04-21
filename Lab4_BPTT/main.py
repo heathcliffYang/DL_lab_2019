@@ -2,17 +2,13 @@ from binary_addition import ba
 import numpy as np
 import rnn
 
-
-
 alpha = 0.1
 acc = 0
 Epochs = 20000
-
 rnn = rnn.RNN()
-
-for i in range(100000000):
+for i in range(1,20000+1):
 	train_data, label = ba()
-	rnn.forward(train_data)
+	y_hat = rnn.forward(train_data)
 	rnn.backward(label, alpha)
 	error = rnn.error()
 	if error == 0:

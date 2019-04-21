@@ -5,7 +5,7 @@ def string2array(string):
     a = np.zeros((len(string),1))
     for i in range(len(string)):
         a[i,0] = float(string[i])
-    return a
+    return np.flip(a)
 
 def ba():
     a = random.randint(-128, 127)
