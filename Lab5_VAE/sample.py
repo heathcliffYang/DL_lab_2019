@@ -1,4 +1,5 @@
 from __future__ import unicode_literals, print_function, division
+from argparse import ArgumentParser
 from io import open
 import unicodedata
 import string
@@ -15,10 +16,8 @@ plt.switch_backend('agg')
 import matplotlib.ticker as ticker
 import numpy as np
 from os import system
-# from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
+from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 from dataloader import *
-
-
 
 
 """==============================================================================
@@ -49,10 +48,14 @@ EOS_token = 1
 hidden_size = 256
 #The number of vocabulary
 vocab_size = 28
+tense_num = 4
+condition_size = 16
 teacher_forcing_ratio = 0.5
 empty_input_ratio = 0.1
 KLD_weight = 0.0
 LR = 0.05
+
+tense_dict = {0:'sp', 1:'tp', 2:'pg', 3:'p'}
 
 #The target word
 reference = 'accessed'
@@ -60,9 +63,9 @@ reference = 'accessed'
 output = 'access'
 
 #compute BLEU-4 score
-# def compute_bleu(output, reference):
-#     cc = SmoothingFunction()
-#     return sentence_bleu([reference], output,weights=(0.25, 0.25, 0.25, 0.25),smoothing_function=cc.method1)
+def compute_bleu(output, reference):
+    cc = SmoothingFunction()
+    return sentence_bleu([reference], output,weights=(0.25, 0.25, 0.25, 0.25),smoothing_function=cc.method1)
 
 #Encoder
 class EncoderRNN(nn.Module):
@@ -72,21 +75,34 @@ class EncoderRNN(nn.Module):
 
         self.embedding = nn.Embedding(input_size, hidden_size)
         self.gru = nn.GRU(hidden_size, hidden_size)
+        self.mean = nn.Linear(hidden_size, hidden_size)
+        self.var = nn.Linear(hidden_size, hidden_size)
+        self.condition = nn.Linear(hidden_size, hidden_size)
+        self.tense_emb = nn.Embedding(tense_num, hidden_size)
 
-    def forward(self, input, hidden, input_length):
+    def forward(self, input, hidden):
         input = input.to(device)
-        print("input shape", input.shape)
-        embedded = self.embedding(input).view(input_length, 1, -1)
-        # embedded = self.embedding(input)
-        print("embedded", embedded.shape)
+
+        embedded = self.embedding(input).view(-1, 1, hidden_size)
         output = embedded
-        output, hidden = self.gru(output, hidden)
-        print("output", output.shape)
-        return output, hidden
 
-    def initHidden(self):
-        return torch.zeros(1, 1, self.hidden_size, device=device)
+        for i in range(output.shape[0]):
+            # combine condition
+            out, hidden = self.gru(output[i].view(1,1,-1), hidden)
 
+        hidden_mean = self.mean(out)
+        hidden_var = self.var(hidden)
+
+        return hidden_mean, hidden_var
+
+    # def initHidden(self):
+    #     return torch.zeros(1, 1, self.hidden_size, device=device)
+
+    def initHidden(self, tense):
+        tense = torch.LongTensor(np.array([tense])).to(device)
+        H = self.tense_emb(tense)
+        H = self.condition(H)
+        return H.view(1,1,-1)
 #Decoder
 class DecoderRNN(nn.Module):
     def __init__(self, hidden_size, output_size):
@@ -97,6 +113,8 @@ class DecoderRNN(nn.Module):
         self.gru = nn.GRU(hidden_size, hidden_size)
         self.out = nn.Linear(hidden_size, output_size)
         self.softmax = nn.LogSoftmax(dim=1)
+        self.condition = nn.Linear(hidden_size*2,hidden_size)
+        self.tense_emb = nn.Embedding(tense_num, hidden_size)
 
     def forward(self, input, hidden):
         output = self.embedding(input).view(1, 1, -1)
@@ -105,12 +123,15 @@ class DecoderRNN(nn.Module):
         output = self.out(output[0])
         return output, hidden
 
-    def initHidden(self):
-        return torch.zeros(1, 1, self.hidden_size, device=device)
+    def initHidden(self, tense, hidden):
+        tense = self.tense_emb(tense).view(1,1,-1)
+        latent = torch.cat((hidden, tense), dim=2)
+        H = self.condition(latent)
+        return H
 
 
-def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, max_length=100):
-    encoder_hidden = encoder.initHidden()
+def train(input_tensor, target_tensor, tense_pair, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, criterion_KL, generative=False, inference_mode=False, max_length=100):
+    encoder_hidden = encoder.initHidden(tense_pair[0])
 
     encoder_optimizer.zero_grad()
     decoder_optimizer.zero_grad()
@@ -121,48 +142,81 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
     encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
 
     loss = 0
+    kl_loss = 0
 
     #----------sequence to sequence part for encoder----------#
-    encoder_output, encoder_hidden = encoder(input_tensor, encoder_hidden, input_length)
-
+    encoder_hidden_mean, encoder_hidden_var = encoder(input_tensor, encoder_hidden)
+    # print("en", encoder_hidden_mean[0,0,:5])
 
     decoder_input = torch.tensor([[GO_token]], device=device)
 
-    decoder_hidden = encoder_hidden
+    # Gaussain noise ------------------------------------------------------------------------------------
+    noise = np.random.normal(np.zeros((hidden_size)), np.ones(hidden_size))
+    # Reparameterization
+    noise = torch.FloatTensor(noise).view(hidden_size,1)
 
-    ##########
-    # use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
-    use_teacher_forcing = False
-	
+    if generative == False:
+        encoder_hidden_var = torch.exp(encoder_hidden_var.view(hidden_size))
+        var = noise * encoder_hidden_var.view(hidden_size,1)
+        encoder_hidden = torch.add(var.view(hidden_size), encoder_hidden_mean.view(hidden_size))
+    else:
+        encoder_hidden = noise
+
+    c = torch.LongTensor(np.array([tense_pair[1]])).to(device)
+    decoder_hidden = decoder.initHidden(c, encoder_hidden.view(1,1,hidden_size))
+    #----------------------------------------------------------------------------------------------------
+
+    use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+
+    if inference_mode == True:
+        use_teacher_forcing = False
+        # print("Turn off teacher forcing")
+
+    result_vec = []
+
+    kl_ans = torch.FloatTensor(1, vocab_size)
 
     #----------sequence to sequence part for decoder----------#
     if use_teacher_forcing:
+        # print("Teacher")
         # Teacher forcing: Feed the target as the next input
         for di in range(target_length):
             # decoder_output, decoder_hidden, decoder_attention = decoder(decoder_input, decoder_hidden)
             decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden)
-            loss += criterion(decoder_output, target_tensor[di])
-            decoder_input = target_tensor[di]  # Teacher forcing
+            loss += criterion(decoder_output, target_tensor[di].view(1,))
 
+            kl_ans.zero_()
+            kl_ans.scatter_(1, target_tensor[di].view(1,1), 1)
+            kl_loss += criterion_KL(decoder_output, kl_ans)
+
+            result_vec.append(torch.argmax(decoder_output, dim=1).item())
+            decoder_input = target_tensor[di]  # Teacher forcing
     else:
         # Without teacher forcing: use its own predictions as the next input
+        # print("Without")
         for di in range(target_length):
             # decoder_output, decoder_hidden, decoder_attention = decoder(decoder_input, decoder_hidden)
             decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden)
             # print("Output:", di, "-", torch.argmax(decoder_output, dim=1), target_tensor[di].view(1,))
             topv, topi = decoder_output.topk(1) #??????????
             decoder_input = topi.squeeze().detach()  # detach from history as input
-
+            result_vec.append(torch.argmax(decoder_output, dim=1).item())
             loss += criterion(decoder_output, target_tensor[di].view(1,))
+
+            kl_ans.zero_()
+            kl_ans.scatter_(1, target_tensor[di].view(1,1), 1)
+            kl_loss += criterion_KL(decoder_output, kl_ans)
+
             if decoder_input.item() == EOS_token:
                 break
 
-    loss.backward()
+    if inference_mode == False:
+        loss.backward()
 
-    encoder_optimizer.step()
-    decoder_optimizer.step()
+        encoder_optimizer.step()
+        decoder_optimizer.step()
 
-    return loss.item() / target_length
+    return loss.item() / target_length, result_vec, kl_loss.item() / target_length
 
 
 def asMinutes(s):
@@ -180,38 +234,122 @@ def timeSince(since, percent):
 
 
 
-def trainIters(encoder, decoder, n_iters, print_every=1000, plot_every=100, learning_rate=0.01):
+def trainIters(encoder, decoder, n_iters, generative, load, print_every=1000, plot_every=100, learning_rate=0.001):
     start = time.time()
     plot_losses = []
     print_loss_total = 0  # Reset every print_every
-    plot_loss_total = 0  # Reset every plot_every
+    batch_size = 3
+    #### every iter
+    total_kl_loss = 0
+    total_loss = 0
+    total_score = 0
+
+    generative = False
+
+    ## Plot 
+    loss_list = []
+    kl_loss_list = []
+    score_list = []
 
     encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)
     decoder_optimizer = optim.SGD(decoder.parameters(), lr=learning_rate)
-    # training_pairs = [tensorsFromPair(random.choice(pairs))
-    #                   for i in range(n_iters)]
+
     train_loader = dataLoader('data/', 'train')
+    test_loader = dataLoader('data/', 'test')
+    test_loader.def_char_i_dict(train_loader.char2idx, train_loader.idx2char, train_loader.n_char)
     criterion = nn.CrossEntropyLoss()
+    criterion_KL = nn.KLDivLoss()
 
-    for iter in range(1, n_iters + 1):
-        print("\n", iter)
-        training_pair = train_loader[iter - 1]
+    if load == True:
+        encoder.load_state_dict(torch.load('Encoder.ckpt'))
+        decoder.load_state_dict(torch.load('Decoder.ckpt'))
+        encoder.eval()
+        decoder.eval()
 
-        # print(train_loader.index2char(training_pair))
-        input_tensor = torch.LongTensor(training_pair[0])#.view(-1,1)
-        # print(input_tensor.shape)
-        target_tensor = torch.LongTensor(training_pair[1])
+    if generative == True:
+        train_loader.mode = 'ge'
+        for i in range(4):
+            idx = random.randint(0, len(train_loader)-1)
+            training_pair, tense_pair = train_loader[idx]
+            loss, result_vec, kl_loss = train(input_tensor, target_tensor, tense_pair, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, criterion_KL, generative, True)
+            print("Input: ", train_loader.vector2char(training_pair[0]), "tense:",tense_dict[tense_pair[0]])
+            print("Result: ", train_loader.vector2char(result_vec), ", correct:", train_loader.vector2char(training_pair[1]),",tense:", tense_dict[tense_pair[1]])
 
-        loss = train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion)
-        print_loss_total += loss
-        plot_loss_total += loss
+
+    for iter in range(1, n_iters + 1 ):
+        idx_boundary = random.randint(0, len(train_loader)-batch_size)
+        encoder.train()
+        decoder.train()
+        for pick_idx in range(idx_boundary, idx_boundary+batch_size):
+            training_pair, tense_pair = train_loader[pick_idx]
+
+            input_tensor = torch.LongTensor(training_pair[0])
+            
+            target_tensor = torch.LongTensor(training_pair[1])
+
+            loss, result_vec, kl_loss = train(input_tensor, target_tensor, tense_pair, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, criterion_KL, generative, False)
+            print_loss_total += loss
+            total_kl_loss += kl_loss
+            total_loss += loss
+
+            # print("Input: ", train_loader.vector2char(training_pair[0]), "tense:",tense_dict[tense_pair[0]])
+            output_char_len = 0
+            for j in range(len(result_vec)):
+                if result_vec[j] == 0:
+                    output_char_len += 1
+            if (output_char_len == len(result_vec)):
+                print("Model cannot learning further.")
+                break
+            # print("Result: ", train_loader.vector2char(result_vec), ", correct:", train_loader.vector2char(training_pair[1]),",tense:", tense_dict[tense_pair[1]])
+            score = compute_bleu(train_loader.vector2char(result_vec), train_loader.vector2char(training_pair[1]))
+            # print("Score:", score)
+            total_score += score
+
+        loss_list.append(total_loss/batch_size)
+        kl_loss_list.append(total_kl_loss/batch_size)
 
         if iter % print_every == 0:
-            print_loss_avg = print_loss_total / print_every
+            print_loss_avg = print_loss_total / (print_every * batch_size)
+            print_score_avg = total_score / (print_every * batch_size)
+            total_score = 0
             print_loss_total = 0
-            print('%s (%d %d%%) %.4f' % (timeSince(start, iter / n_iters), iter, iter / n_iters * 100, print_loss_avg))
+            print('%s (%d %d%%) avg loss: %.4f, avg score: %.4f' % (timeSince(start, iter / n_iters), iter, iter / n_iters * 100, print_loss_avg, print_score_avg))
+
+        test_total_score = 0
+        # print("Test start")
+        for i in range(len(test_loader)):
+            encoder.eval()
+            decoder.eval()
+            training_pair, tense_pair = test_loader[i]
+            input_tensor = torch.LongTensor(training_pair[0])
+            target_tensor = torch.LongTensor(training_pair[1])
+
+            loss, result_vec, kl_loss = train(input_tensor, target_tensor, tense_pair, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, criterion_KL, generative, True)
+            score = compute_bleu(test_loader.vector2char(result_vec), test_loader.vector2char(training_pair[1]))
+            test_total_score += score
+            print("iter", iter, "Input: ", test_loader.vector2char(training_pair[0]), "tense:",tense_dict[tense_pair[0]])
+            print("Result: ", test_loader.vector2char(result_vec), ", correct:", test_loader.vector2char(training_pair[1]),",tense:", tense_dict[tense_pair[1]])
+
+        score_list.append(test_total_score / len(test_loader))
+        print("Test data score:", test_total_score / len(test_loader), "\n")
+        if test_total_score / len(test_loader) >= 0.7:
+            print("hit")
+            torch.save(encoder.state_dict(), "Encoder.ckpt")
+            torch.save(decoder.state_dict(), "Decoder.ckpt")
+
+    plt.plot(loss_list, color='r', label='loss')
+    plt.plot(kl_loss_list, color='b', label='kl loss')
+    plt.plot(score_list, color='g', label='BLEU-4 score')
+
+    plt.legend()
+    torch.save(encoder.state_dict(), "last_Encoder.ckpt")
+    torch.save(decoder.state_dict(), "last_Decoder.ckpt")
 
 
+parser = ArgumentParser()
+parser.add_argument("generative", type=bool)
+parser.add_argument("load", type=bool)
+args = parser.parse_args()
 encoder1 = EncoderRNN(vocab_size, hidden_size).to(device)
 decoder1 = DecoderRNN(hidden_size, vocab_size).to(device)
-trainIters(encoder1, decoder1, 200, print_every=20)
+trainIters(encoder1, decoder1, 10000, args.generative, args.load, print_every=20)
