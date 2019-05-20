@@ -228,17 +228,18 @@ criterion = nn.BCELoss()
 criterion_Q = nn.CrossEntropyLoss()
 num_classes = 10
 #########################
-fixed_noise_z = torch.randn(opt.batchSize, nz-num_classes, device=device)
-# print("z", fixed_noise_z.type())
-fixed_c_idx = np.random.randint(num_classes, size=opt.batchSize)
-# print("fixed_c_idx", fixed_c_idx)
+fixed_noise_z = torch.randn(8, nz-num_classes, device=device)
+fixed_noise_z = torch.cat([fixed_noise_z, fixed_noise_z,fixed_noise_z,fixed_noise_z,fixed_noise_z,fixed_noise_z,fixed_noise_z,fixed_noise_z]).to(device)
+print("z", fixed_noise_z.shape)
+fixed_c_idx = np.random.randint(num_classes, size=8)
+fixed_c_idx = np.array([np.roll(fixed_c_idx, x) for x in range(8)]).flatten()
 fixed_noise_c = np.zeros((opt.batchSize, num_classes))
 for i in range(opt.batchSize):
     fixed_noise_c[i, fixed_c_idx[i]] = 1.
 fixed_c_idx = torch.from_numpy(fixed_c_idx).type(torch.LongTensor).to(device)
 fixed_noise_c = torch.from_numpy(fixed_noise_c).type(torch.FloatTensor).to(device)
-# print("c", fixed_noise_c)
 fixed_noise = torch.cat([fixed_noise_z, fixed_noise_c], -1).view(opt.batchSize, nz, 1, 1).to(device)
+print("final", fixed_noise.shape)
 ##########################
 
 real_label = 1
@@ -254,7 +255,7 @@ prob_fake_G = []
 ##########################
 
 # setup optimizer
-optimizerD = optim.Adam(netD.parameters(), lr=2e-4, betas=(opt.beta1, 0.999))
+optimizerD = optim.Adam(netD.parameters(), lr=1e-4, betas=(opt.beta1, 0.999))
 optimizerG = optim.Adam(netG.parameters(), lr=1e-4, betas=(opt.beta1, 0.999))
 
 for epoch in range(opt.niter):
@@ -266,7 +267,9 @@ for epoch in range(opt.niter):
         netD.zero_grad()
         real_cpu = data[0].to(device)
         ### data[0].shape = torch.Size([64, 1, 64, 64]) 
+        
         batch_size = real_cpu.size(0)
+        print("Batch", batch_size)
         label = torch.full((batch_size,), real_label, device=device)
 
         output = netD(real_cpu)
@@ -276,8 +279,10 @@ for epoch in range(opt.niter):
 
         # train with fake
         ################# random sample noise
-        noise_z = torch.randn(batch_size, nz-num_classes, device=device)
-        noise_c_idx = np.random.randint(num_classes, size=batch_size)
+        noise_z = torch.randn(8, nz-num_classes, device=device)
+        noise_z = torch.cat([noise_z, noise_z, noise_z, noise_z, noise_z, noise_z, noise_z, noise_z])[:batch_size].to(device)
+        noise_c_idx = np.random.randint(num_classes, size=int(batch_size/8))
+        noise_c_idx = np.array([np.roll(noise_c_idx, x) for x in range(8)]).flatten()
         noise_c = np.zeros((batch_size, num_classes))
         for x in range(batch_size):
             noise_c[x, noise_c_idx[x]] = 1.
@@ -354,7 +359,8 @@ plt.plot(x_epoch_list, loss_list, color=color[4], label='loss')
 plt.title('Loss curves')
 plt.xlabel('Epochs')
 plt.ylabel('loss')
-plt.legend
+plt.legend()
+plt.ylim((min([errD_list.min, errG_list.min, loss_list.min])-0.5,max([errD_list.max, errG_list.max, loss_list.max])+0.5))
 plt.savefig('loss.png')
 plt.cla()
 plt.clf()
@@ -366,7 +372,8 @@ plt.plot(x_epoch_list, prob_fake_G, color=color[6], label='fake af G')
 plt.title('Prob curves')
 plt.xlabel('Epochs')
 plt.ylabel('Prob')
-plt.legend
+plt.ylim((-0.1,1.1))
+plt.legend()
 plt.savefig('prob.png')
 plt.cla()
 plt.clf()
