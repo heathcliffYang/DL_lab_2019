@@ -255,11 +255,16 @@ prob_fake_G = []
 ##########################
 
 # setup optimizer
-optimizerD = optim.Adam(netD.parameters(), lr=1e-4, betas=(opt.beta1, 0.999))
-optimizerG = optim.Adam(netG.parameters(), lr=1e-4, betas=(opt.beta1, 0.999))
+optimizerD = optim.Adam(netD.parameters(), lr=2e-4, betas=(opt.beta1, 0.999))
+optimizerG = optim.Adam(netG.parameters(), lr=1e-3, betas=(opt.beta1, 0.999))
+
+schedulerD = optim.lr_scheduler.StepLR(optimizerD, step_size=900, gamma=0.8)
+schedulerG = optim.lr_scheduler.StepLR(optimizerG, step_size=900, gamma=0.8)
 
 for epoch in range(opt.niter):
     for i, data in enumerate(dataloader, 0):
+        schedulerD.step()
+        schedulerG.step()
         ############################
         # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
         ###########################
@@ -339,16 +344,16 @@ for epoch in range(opt.niter):
 
             print("image save %d"%(i))
             vutils.save_image(real_cpu,
-                    '%s/real_samples.png' % opt.outf,
+                    '%s/real_samples_step.png' % opt.outf,
                     normalize=True)
             fake = netG(fixed_noise)
             vutils.save_image(fake.detach(),
-                    '%s/fake_samples_epoch_%03d.png' % (opt.outf, epoch),
+                    '%s/fake_samples_epoch_%03d_step.png' % (opt.outf, epoch),
                     normalize=True)
 
     # do checkpointing
-    torch.save(netG.state_dict(), '%s/netG_epoch_%d.pth' % (opt.outf, epoch))
-    torch.save(netD.state_dict(), '%s/netD_epoch_%d.pth' % (opt.outf, epoch))
+    torch.save(netG.state_dict(), '%s/netG_epoch_%d_step.pth' % (opt.outf, epoch))
+    torch.save(netD.state_dict(), '%s/netD_epoch_%d_step.pth' % (opt.outf, epoch))
 
 
 x_epoch_list = [x for x in range(len(errD_list))]
@@ -360,8 +365,8 @@ plt.title('Loss curves')
 plt.xlabel('Epochs')
 plt.ylabel('loss')
 plt.legend()
-plt.ylim((min([errD_list.min, errG_list.min, loss_list.min])-0.5,max([errD_list.max, errG_list.max, loss_list.max])+0.5))
-plt.savefig('loss.png')
+plt.ylim((min([min(errD_list), min(errG_list), min(loss_list)])-0.5,max([max(errD_list), max(errG_list), max(loss_list)])+0.5))
+plt.savefig('loss_step.png')
 plt.cla()
 plt.clf()
 plt.close()
@@ -374,7 +379,7 @@ plt.xlabel('Epochs')
 plt.ylabel('Prob')
 plt.ylim((-0.1,1.1))
 plt.legend()
-plt.savefig('prob.png')
+plt.savefig('prob_step.png')
 plt.cla()
 plt.clf()
 plt.close()
